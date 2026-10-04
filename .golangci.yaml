@@ -1,0 +1,42 @@
+version: "2"
+run:
+  tests: false
+linters:
+  default: all         # CRITICAL — must be present
+  disable:
+    - cyclop
+    - depguard
+    - exhaustruct
+    - funlen
+    - lll
+    - nlreturn
+    - tagalign
+    - tagliatelle
+    - varnamelen
+    - noinlineerr
+    - wrapcheck
+    - godox
+    - errcheck        # too many false positives with deferred calls
+    - wsl
+    - wsl_v5
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

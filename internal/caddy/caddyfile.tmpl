@@ -1,0 +1,9 @@
+{{range $i, $site := .Sites}}{{if $i}}
+{{end}}{{$site.Domain}} {
+	root * {{$site.Root}}
+{{- if $site.TryFiles}}
+	try_files {{join $site.TryFiles " "}}
+{{- end}}
+	file_server
+}
+{{end -}}
