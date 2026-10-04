@@ -90,8 +90,10 @@ func (c Caddy) Upload(ctx context.Context, file Caddyfile) error {
 	return nil
 }
 
-// render executes the embedded template: one block per site with its root,
-// optional try_files, and file_server.
+// render executes the embedded template: a header comment, then one block per
+// site with its root, optional try_files, and file_server. The comment keeps a
+// file without sites valid, which Caddy needs to accept an empty site set as a
+// configuration that clears whatever ran before.
 func (f Caddyfile) render() (string, error) {
 	var b strings.Builder
 	if err := fileTemplate.Execute(&b, f); err != nil {

@@ -1,0 +1,84 @@
+# Local development stack: Caddy, s3-sites, NATS and VersityGW wired end to end
+# with dev credentials, so an upload turns into a served site within the event
+# debounce (seconds — well under the one-minute re-sync interval).
+#
+#   docker compose -f docker-compose.dev.yaml up -d
+#   mc alias set dev http://127.0.0.1:9000 dev devdevdev
+#   mc cp ./index.html dev/sites/demo.localhost/index.html
+#   curl -k --resolve demo.localhost:443:127.0.0.1 https://demo.localhost/
+#
+# Ports: S3 on 9000, NATS on 4222 (events on the sites.events subject), Caddy on
+# 80/443. The gateway's admin and s3-sites' output stay on the compose network.
+name: s3-sites-dev
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # The uploaded Caddyfile carries no global options, so every /load would
+      # reset the admin listener to localhost:2019; this keeps it on the
+      # compose network, where s3-sites reaches it.
+      CADDY_ADMIN: 0.0.0.0:2019
+    volumes:
+      - sites:/srv/sites
+      - caddy-data:/data
+      - caddy-config:/config
+
+  s3-sites:
+    image: ghcr.io/reddec/s3-sites:latest
+    restart: unless-stopped
+    depends_on:
+      - caddy
+      - versitygw
+      - nats
+    environment:
+      S3SITES_STORAGE_BUCKET: sites
+      S3SITES_STORAGE_ENDPOINT: http://versitygw:9000
+      S3SITES_STORAGE_ACCESS_KEY_ID: dev
+      S3SITES_STORAGE_SECRET_ACCESS_KEY: devdevdev
+      S3SITES_EVENTS_NATS: nats://nats:4222
+      S3SITES_CADDY_ADMIN: http://caddy:2019
+      S3SITES_OUTPUT: /srv/sites
+    volumes:
+      - sites:/srv/sites
+
+  versitygw:
+    image: ghcr.io/versity/versitygw:latest
+    restart: unless-stopped
+    depends_on:
+      - nats
+    command: ["posix", "/data"]
+    environment:
+      VGW_PORT: ":9000"
+      ROOT_ACCESS_KEY_ID: dev
+      ROOT_SECRET_ACCESS_KEY: devdevdev
+      VGW_EVENT_NATS_URL: nats://nats:4222
+      VGW_EVENT_NATS_TOPIC: sites.events
+    ports:
+      - "9000:9000"
+    volumes:
+      - store:/data
+
+  nats:
+    image: nats:2-alpine
+    restart: unless-stopped
+    ports:
+      - "4222:4222"
+
+  # A bucket of the posix backend is a directory, so preparing the stack is one
+  # mkdir; s3-sites picks the bucket up on its first pass.
+  bucket:
+    image: alpine:3.20
+    command: ["mkdir", "-p", "/data/sites"]
+    volumes:
+      - store:/data
+
+volumes:
+  sites:
+  store:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,51 @@
+# Caddy serves the sites, s3-sites mirrors them out of the bucket into the
+# shared volume; only the public HTTP/HTTPS ports are published.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # The uploaded Caddyfile carries no global options, so every /load would
+      # reset the admin listener to localhost:2019. The variable keeps it on
+      # all interfaces of the compose network, where s3-sites reaches it; the
+      # port itself is never published.
+      CADDY_ADMIN: 0.0.0.0:2019
+    volumes:
+      - sites:/srv/sites
+      - caddy-data:/data
+      - caddy-config:/config
+
+  s3-sites:
+    image: ghcr.io/reddec/s3-sites:latest
+    restart: unless-stopped
+    depends_on:
+      - caddy
+    # Every flag has a S3SITES_* variable; a .env next to this file is passed
+    # straight through, so configuration lives there instead of here.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Wiring of this stack: the shared tree and the admin API on the compose
+      # network (the admin port itself is never published).
+      S3SITES_CADDY_ADMIN: http://caddy:2019
+      S3SITES_OUTPUT: /srv/sites
+      # Required by the CLI, taken from the shell or from .env.
+      S3SITES_STORAGE_BUCKET: ${S3SITES_STORAGE_BUCKET:?set S3SITES_STORAGE_BUCKET}
+      # Optional — the defaults fit most setups, uncomment to override:
+      # S3SITES_STORAGE_ENDPOINT: http://minio:9000
+      # S3SITES_STORAGE_REGION: us-east-1
+      # S3SITES_STORAGE_ACCESS_KEY_ID: minioadmin
+      # S3SITES_STORAGE_SECRET_ACCESS_KEY: minioadmin
+      # S3SITES_EVENTS_NATS: nats://nats:4222
+      # S3SITES_RESYNC: 1m
+    volumes:
+      - sites:/srv/sites
+
+volumes:
+  sites:
+  caddy-data:
+  caddy-config:

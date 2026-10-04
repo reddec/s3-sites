@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os/signal"
 	"syscall"
 	"time"
@@ -39,7 +40,7 @@ type Config struct {
 	Events struct {
 		NATS      string `help:"NATS URL receiving the store notifications; empty syncs on the re-sync interval only"`
 		Subject   string `help:"Subject the store publishes object notifications to" default:"sites.events"`
-		Buffer    int    `help:"Events queued while the syncer is busy" default:"0"`
+		Buffer    int    `help:"Events queued while the syncer is busy" default:"4096"`
 		Reconnect bool   `help:"Keep listening across broker outages instead of ending the stream" default:"true"`
 	} `embed:"" prefix:"events."`
 }
@@ -49,7 +50,7 @@ func main() {
 	kong.Parse(&cfg,
 		kong.Name("s3-sites"),
 		kong.Description("Mirror the site roots of an S3-compatible bucket into a directory served by Caddy."),
-		kong.DefaultEnvars("S3SYNC"),
+		kong.DefaultEnvars("S3SITES"),
 	)
 	if err := run(cfg); err != nil {
 		panic(err)
@@ -95,8 +96,8 @@ func run(cfg Config) error {
 	logger.Info("syncing sites",
 		"bucket", cfg.Storage.Bucket,
 		"output", cfg.Output,
-		"events", cfg.Events.NATS,
-		"caddy", cfg.Caddy.Admin,
+		"events", redacted(cfg.Events.NATS),
+		"caddy", redacted(cfg.Caddy.Admin),
 	)
 	if err := sync.Sync(ctx, sync.Config{
 		Storage: store,
@@ -109,4 +110,14 @@ func run(cfg Config) error {
 	}
 	logger.Info("stopped", "cause", context.Cause(ctx))
 	return nil
+}
+
+// redacted returns a URL with the password of its userinfo masked, so an
+// address can be logged as it was configured.
+func redacted(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "" // an unparseable URL may carry credentials, echo nothing
+	}
+	return u.Redacted()
 }

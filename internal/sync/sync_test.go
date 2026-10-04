@@ -7,10 +7,12 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,6 +92,51 @@ func TestSyncServesRootIndexForUnknownPath(t *testing.T) {
 	status, body = get(t, alpha, "https://alpha.localhost/page.html")
 	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, "alpha page", body)
+}
+
+// TestSyncRetriesRejectedCaddyUpdate checks that a configuration the admin
+// API refuses is published again until it is accepted.
+func TestSyncRetriesRejectedCaddyUpdate(t *testing.T) {
+	env := newEnvironment(t)
+	env.put(t, "alpha.localhost/index.html", "alpha home")
+
+	var attempts atomic.Int64
+	var lastBody atomic.Pointer[string]
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		text := string(body)
+		lastBody.Store(&text)
+		if err != nil {
+			http.Error(w, "read request", http.StatusInternalServerError)
+			return
+		}
+		if attempts.Add(1) == 1 {
+			// Only the first upload is refused; every retry is accepted.
+			http.Error(w, "admin unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(admin.Close)
+
+	cfg := env.config()
+	cfg.Caddy = new(caddy.New(admin.URL))
+	cfg.Resync = time.Hour // keep full passes out of the retry window
+	cfg.Events = nil       // only the upload that keeps retrying may publish
+	env.start(t, cfg)
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.GreaterOrEqual(c, attempts.Load(), int64(2))
+	}, 30*time.Second, 50*time.Millisecond, "rejected caddy config was never published again")
+
+	body := lastBody.Load()
+	require.NotNil(t, body)
+	assert.Contains(t, *body, "alpha.localhost {")
+	assert.Contains(t, *body, "try_files {path} /index.html")
+
+	// The accepted configuration ends the retrying.
+	time.Sleep(250 * time.Millisecond)
+	assert.Equal(t, int64(2), attempts.Load(), "config was published again after caddy accepted it")
 }
 
 func TestSyncAppliesEventsAfterCooldown(t *testing.T) {

@@ -37,6 +37,10 @@ const (
 // place; anything left under it is safe to remove.
 const tempPrefix = ".sync-"
 
+// retryInterval is the pause between two attempts to publish a Caddy
+// configuration that Caddy refused.
+const retryInterval = time.Second
+
 // errStreamClosed reports that the event stream ended for good while the
 // context was still live: without events nothing triggers incremental syncs.
 var errStreamClosed = errors.New("event stream closed")
@@ -61,9 +65,11 @@ type Config struct {
 //
 // The first pass runs immediately, so output and Caddy are in place before the
 // first event is handled. Temporary download files left by an interrupted run
-// are removed on every full pass. A nil Config.Events disables event-driven
-// syncing, a nil Config.Caddy skips config updates. Sync returns nil once ctx
-// is canceled and an error if the event stream closes while ctx is still live.
+// are removed on every full pass. A rejected Caddy update is published again
+// every [retryInterval], forever, until Caddy accepts it. A nil
+// Config.Events disables event-driven syncing, a nil Config.Caddy skips config
+// updates. Sync returns nil once ctx is canceled and an error if the event
+// stream closes while ctx is still live.
 func Sync(ctx context.Context, config Config) error {
 	config.Resync = cmp.Or(config.Resync, time.Minute)
 
@@ -383,15 +389,28 @@ func (s *syncer) dropDomain(domain string) error {
 	return nil
 }
 
-// updateCaddy uploads a Caddyfile for the domains with local content. A failed
-// upload is logged; the next full pass publishes again.
+// updateCaddy uploads a Caddyfile for the domains with local content and keeps
+// publishing it every [retryInterval] until Caddy accepts it, so a Caddy that
+// starts or recovers later gets its configuration without a restart of the
+// syncer. It returns once the config is accepted or ctx is canceled.
 func (s *syncer) updateCaddy(ctx context.Context) {
 	if s.caddy == nil {
 		return
 	}
-	if err := s.caddy.Upload(ctx, caddy.Caddyfile{Sites: s.sites()}); err != nil {
-		if ctx.Err() == nil {
-			slog.Error("update caddy failed", "error", err)
+	file := caddy.Caddyfile{Sites: s.sites()}
+	for {
+		err := s.caddy.Upload(ctx, file)
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		slog.Error("update caddy failed, retrying", "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retryInterval):
 		}
 	}
 }

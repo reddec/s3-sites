@@ -12,7 +12,9 @@ builds:
 
 archives:
   - formats: binary
-    name_template: "{{ .Binary }}_{{ .Os }}-{{ .Arch }}"
+    # Artifact names carry the uname -m spelling of the architecture so the
+    # README one-liner can build the download URL from uname alone.
+    name_template: '{{ .Binary }}_{{ .Os }}-{{ if and (eq .Arch "arm64") (eq .Os "linux") }}aarch64{{ else if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
 
 changelog:
   sort: asc
