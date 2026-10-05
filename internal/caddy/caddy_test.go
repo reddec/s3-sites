@@ -67,6 +67,41 @@ func TestUploadServesSitesOnRunningCaddy(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, status)
 }
 
+// TestUploadAppliesSnippetBase checks that a snippet is rendered ahead of the
+// generated site blocks and reaches the running config: it defines a whole
+// extra site, imported at the top level, plus a global options block that keeps
+// the admin listener reachable for the next upload.
+func TestUploadAppliesSnippetBase(t *testing.T) {
+	adminURL, tlsPort := startCaddy(t)
+
+	file := caddy.Caddyfile{
+		Snippet: "{\n\tadmin 0.0.0.0:2019\n}\n\n" +
+			"(extra) {\n\textra.localhost {\n\t\trespond \"from snippet\"\n\t}\n}\n\nimport extra\n",
+		Sites: []caddy.Site{{
+			Domain: "foo.localhost",
+			Root:   "/srv/sites/foo.localhost",
+		}},
+	}
+	require.NoError(t, caddy.New(adminURL).Upload(t.Context(), file))
+
+	foo := siteClient(t, tlsPort, "foo.localhost")
+	waitForSite(t, foo, "https://foo.localhost/")
+	status, body := get(t, foo, "https://foo.localhost/")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, fooIndex, body)
+
+	extra := siteClient(t, tlsPort, "extra.localhost")
+	waitForSite(t, extra, "https://extra.localhost/")
+	status, body = get(t, extra, "https://extra.localhost/")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "from snippet", body)
+
+	// The snippet's global options kept the admin listener on all interfaces,
+	// so uploading the same configuration again still reaches it. A file with
+	// only site blocks resets it to localhost:2019 and fails here.
+	require.NoError(t, caddy.New(adminURL).Upload(t.Context(), file))
+}
+
 func TestUploadSurfacesAdapterRejection(t *testing.T) {
 	adminURL, _ := startCaddy(t)
 

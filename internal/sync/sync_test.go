@@ -72,6 +72,30 @@ func TestSyncDownloadsSitesOnStart(t *testing.T) {
 	assert.Equal(t, "beta home", body)
 }
 
+// TestSyncAppliesSnippetBase checks that Config.Snippet becomes part of the
+// uploaded Caddyfile: the snippet defines an extra site, which the syncer
+// cannot generate itself, and Caddy serves it next to the mirrored one.
+func TestSyncAppliesSnippetBase(t *testing.T) {
+	env := newEnvironment(t)
+	env.put(t, "alpha.localhost/index.html", "alpha home")
+
+	cfg := env.config()
+	cfg.Snippet = "(extra) {\n\textra.localhost {\n\t\trespond \"from snippet\"\n\t}\n}\n\nimport extra\n"
+	env.start(t, cfg)
+
+	alpha := siteClient(t, env.sitePort, "alpha.localhost")
+	waitForSite(t, alpha, "https://alpha.localhost/")
+	status, body := get(t, alpha, "https://alpha.localhost/")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "alpha home", body)
+
+	extra := siteClient(t, env.sitePort, "extra.localhost")
+	waitForSite(t, extra, "https://extra.localhost/")
+	status, body = get(t, extra, "https://extra.localhost/")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "from snippet", body)
+}
+
 // TestSyncServesRootIndexForUnknownPath checks the fallback every synced site
 // gets: a path the mirror does not hold answers the site's index.html.
 func TestSyncServesRootIndexForUnknownPath(t *testing.T) {

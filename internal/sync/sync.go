@@ -49,6 +49,7 @@ type Config struct {
 	Storage *storage.Storage
 	Caddy   *caddy.Caddy
 	Output  string // output directory
+	Snippet string // Caddyfile base content rendered before the generated site blocks
 	Events  <-chan events.Event
 	Resync  time.Duration // manual re-sync interval
 }
@@ -66,7 +67,8 @@ type Config struct {
 // The first pass runs immediately, so output and Caddy are in place before the
 // first event is handled. Temporary download files left by an interrupted run
 // are removed on every full pass. A rejected Caddy update is published again
-// every [retryInterval], forever, until Caddy accepts it. A nil
+// every [retryInterval], forever, until Caddy accepts it. Config.Snippet is
+// rendered before the site blocks of every uploaded Caddyfile. A nil
 // Config.Events disables event-driven syncing, a nil Config.Caddy skips config
 // updates. Sync returns nil once ctx is canceled and an error if the event
 // stream closes while ctx is still live.
@@ -81,6 +83,7 @@ func Sync(ctx context.Context, config Config) error {
 		storage: config.Storage,
 		caddy:   config.Caddy,
 		output:  config.Output,
+		snippet: config.Snippet,
 		events:  config.Events,
 		resync:  config.Resync,
 		index:   make(map[string]map[string]string),
@@ -95,6 +98,7 @@ type syncer struct {
 	storage *storage.Storage
 	caddy   *caddy.Caddy
 	output  string
+	snippet string
 	events  <-chan events.Event
 	resync  time.Duration
 
@@ -397,7 +401,7 @@ func (s *syncer) updateCaddy(ctx context.Context) {
 	if s.caddy == nil {
 		return
 	}
-	file := caddy.Caddyfile{Sites: s.sites()}
+	file := caddy.Caddyfile{Sites: s.sites(), Snippet: s.snippet}
 	for {
 		err := s.caddy.Upload(ctx, file)
 		if err == nil {

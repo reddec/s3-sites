@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -35,7 +36,8 @@ type Config struct {
 		SecretAccessKey string `help:"Secret key of the access key"`
 	} `embed:"" prefix:"storage."`
 	Caddy struct {
-		Admin string `help:"Caddy admin API URL; empty stops updating Caddy" default:"http://localhost:2019"`
+		Admin   string `help:"Caddy admin API URL; empty stops updating Caddy" default:"http://localhost:2019"`
+		Snippet string `help:"Path to a Caddyfile snippet rendered before the generated site blocks; read once at startup"`
 	} `embed:"" prefix:"caddy."`
 	Events struct {
 		NATS      string `help:"NATS URL receiving the store notifications; empty syncs on the re-sync interval only"`
@@ -62,6 +64,15 @@ func main() {
 func run(cfg Config) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	var snippet string
+	if cfg.Caddy.Snippet != "" {
+		body, err := os.ReadFile(cfg.Caddy.Snippet)
+		if err != nil {
+			return fmt.Errorf("read caddy snippet: %w", err)
+		}
+		snippet = string(body)
+	}
 
 	store, err := storage.New(ctx, storage.Config{
 		Endpoint:        cfg.Storage.Endpoint,
@@ -96,6 +107,7 @@ func run(cfg Config) error {
 	logger.Info("syncing sites",
 		"bucket", cfg.Storage.Bucket,
 		"output", cfg.Output,
+		"snippet", cfg.Caddy.Snippet,
 		"events", redacted(cfg.Events.NATS),
 		"caddy", redacted(cfg.Caddy.Admin),
 	)
@@ -103,6 +115,7 @@ func run(cfg Config) error {
 		Storage: store,
 		Caddy:   admin,
 		Output:  cfg.Output,
+		Snippet: snippet,
 		Events:  stream,
 		Resync:  cfg.Resync,
 	}); err != nil {
