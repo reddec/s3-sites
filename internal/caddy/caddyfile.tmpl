@@ -3,6 +3,9 @@
 
 {{end}}{{range $i, $site := .Sites}}{{if $i}}
 {{end}}{{$site.Domain}} {
+{{- if $site.Compress}}
+	encode zstd gzip
+{{- end}}
 	root * {{$site.Root}}
 {{- if $site.TryFiles}}
 	try_files {{join $site.TryFiles " "}}

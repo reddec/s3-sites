@@ -36,8 +36,9 @@ type Config struct {
 		SecretAccessKey string `help:"Secret key of the access key"`
 	} `embed:"" prefix:"storage."`
 	Caddy struct {
-		Admin   string `help:"Caddy admin API URL; empty stops updating Caddy" default:"http://localhost:2019"`
-		Snippet string `help:"Path to a Caddyfile snippet rendered before the generated site blocks; read once at startup"`
+		Admin    string `help:"Caddy admin API URL; empty stops updating Caddy" default:"http://localhost:2019"`
+		Snippet  string `help:"Path to a Caddyfile snippet rendered before the generated site blocks; read once at startup"`
+		Compress bool   `help:"Compress responses with zstd, then gzip; disable with --caddy.compress=false" default:"true"`
 	} `embed:"" prefix:"caddy."`
 	Events struct {
 		NATS      string `help:"NATS URL receiving the store notifications; empty syncs on the re-sync interval only"`
@@ -108,16 +109,18 @@ func run(cfg Config) error {
 		"bucket", cfg.Storage.Bucket,
 		"output", cfg.Output,
 		"snippet", cfg.Caddy.Snippet,
+		"compress", cfg.Caddy.Compress,
 		"events", redacted(cfg.Events.NATS),
 		"caddy", redacted(cfg.Caddy.Admin),
 	)
 	if err := sync.Sync(ctx, sync.Config{
-		Storage: store,
-		Caddy:   admin,
-		Output:  cfg.Output,
-		Snippet: snippet,
-		Events:  stream,
-		Resync:  cfg.Resync,
+		Storage:  store,
+		Caddy:    admin,
+		Output:   cfg.Output,
+		Snippet:  snippet,
+		Compress: cfg.Caddy.Compress,
+		Events:   stream,
+		Resync:   cfg.Resync,
 	}); err != nil {
 		return fmt.Errorf("sync sites: %w", err)
 	}

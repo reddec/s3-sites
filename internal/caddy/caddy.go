@@ -47,6 +47,7 @@ type Site struct {
 	Domain   string
 	Root     string
 	TryFiles []string
+	Compress bool // compress the responses of this site
 }
 
 // Caddyfile is the complete configuration uploaded to Caddy.
@@ -92,11 +93,11 @@ func (c Caddy) Upload(ctx context.Context, file Caddyfile) error {
 }
 
 // render executes the embedded template: a header comment, the optional
-// snippet, then one block per site with its root, optional try_files, and
-// file_server. The comment keeps a file without sites valid, which Caddy needs
-// to accept an empty site set as a configuration that clears whatever ran
-// before. Trimming the snippet keeps the rendered spacing independent of how
-// the snippet file was written.
+// snippet, then one block per site with optional response compression, its
+// root, optional try_files, and file_server. The comment keeps a file without
+// sites valid, which Caddy needs to accept an empty site set as a
+// configuration that clears whatever ran before. Trimming the snippet keeps the
+// rendered spacing independent of how the snippet file was written.
 func (f Caddyfile) render() (string, error) {
 	f.Snippet = strings.TrimSpace(f.Snippet)
 	var b strings.Builder

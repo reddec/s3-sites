@@ -1,6 +1,8 @@
 package caddy_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"io"
@@ -27,6 +29,10 @@ const (
 	// reachable from the test host; the uploaded config replaces it entirely.
 	bootstrapCaddyfile = "{\n\tadmin 0.0.0.0:2019\n}\n"
 )
+
+// largePage is bigger than the 512-byte minimum length of Caddy's encoder, so
+// a compressed response to it is observable.
+var largePage = strings.Repeat("<p>compressible content</p>", 32)
 
 func TestUploadServesSitesOnRunningCaddy(t *testing.T) {
 	adminURL, tlsPort := startCaddy(t)
@@ -102,6 +108,48 @@ func TestUploadAppliesSnippetBase(t *testing.T) {
 	require.NoError(t, caddy.New(adminURL).Upload(t.Context(), file))
 }
 
+// TestUploadCompressesResponses checks that compression is per site: a block
+// with Compress serves gzip-encoded responses to a client that asks for gzip,
+// while a block without it answers the same request as it is.
+func TestUploadCompressesResponses(t *testing.T) {
+	adminURL, tlsPort := startCaddy(t)
+
+	file := caddy.Caddyfile{Sites: []caddy.Site{
+		{
+			Domain:   "foo.localhost",
+			Root:     "/srv/sites/foo.localhost",
+			TryFiles: []string{"{path}", "/index.html"},
+			Compress: true,
+		},
+		{
+			Domain: "bar.localhost",
+			Root:   "/srv/sites/bar.localhost",
+		},
+	}}
+	require.NoError(t, caddy.New(adminURL).Upload(t.Context(), file))
+
+	foo := compressionClient(t, tlsPort, "foo.localhost")
+	waitForSite(t, foo, "https://foo.localhost/")
+
+	status, encoding, body := getEncoded(t, foo, "https://foo.localhost/large.html")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "gzip", encoding)
+
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	require.NoError(t, err)
+	plain, err := io.ReadAll(zr)
+	require.NoError(t, err)
+	assert.Equal(t, largePage, string(plain))
+
+	bar := compressionClient(t, tlsPort, "bar.localhost")
+	waitForSite(t, bar, "https://bar.localhost/")
+
+	status, encoding, body = getEncoded(t, bar, "https://bar.localhost/")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Empty(t, encoding, "a site without Compress must not be encoded")
+	assert.Equal(t, barIndex, string(body))
+}
+
 func TestUploadSurfacesAdapterRejection(t *testing.T) {
 	adminURL, _ := startCaddy(t)
 
@@ -146,6 +194,11 @@ func startCaddy(t *testing.T) (adminURL, tlsPort string) {
 			ContainerFilePath: "/srv/sites/foo.localhost/index.html",
 			FileMode:          0o644,
 			Reader:            strings.NewReader(fooIndex),
+		},
+		{
+			ContainerFilePath: "/srv/sites/foo.localhost/large.html",
+			FileMode:          0o644,
+			Reader:            strings.NewReader(largePage),
 		},
 		{
 			ContainerFilePath: "/srv/sites/bar.localhost/index.html",
@@ -214,4 +267,28 @@ func get(t *testing.T, client *http.Client, url string) (int, string) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return resp.StatusCode, string(body)
+}
+
+// compressionClient returns a client that asks for gzip but leaves the response
+// encoded, so tests can observe the Content-Encoding header.
+func compressionClient(t *testing.T, tlsPort, domain string) *http.Client {
+	t.Helper()
+	client := siteClient(t, tlsPort, domain)
+	client.Transport.(*http.Transport).DisableCompression = true
+	return client
+}
+
+// getEncoded issues a GET that asks for gzip and returns the status, the
+// Content-Encoding header, and the body as it arrived.
+func getEncoded(t *testing.T, client *http.Client, url string) (int, string, []byte) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, resp.Header.Get("Content-Encoding"), body
 }

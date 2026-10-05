@@ -1,6 +1,8 @@
 package sync_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"io"
@@ -94,6 +96,33 @@ func TestSyncAppliesSnippetBase(t *testing.T) {
 	status, body = get(t, extra, "https://extra.localhost/")
 	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, "from snippet", body)
+}
+
+// TestSyncCompressesResponses checks that Config.Compress reaches the uploaded
+// Caddyfile: the served site answers gzip-encoded to a client that asks for it.
+func TestSyncCompressesResponses(t *testing.T) {
+	env := newEnvironment(t)
+	// Bigger than the 512-byte minimum length of Caddy's encoder, so a
+	// compressed response is observable.
+	page := strings.Repeat("<p>compressible content</p>", 32)
+	env.put(t, "alpha.localhost/index.html", page)
+
+	cfg := env.config()
+	cfg.Compress = true
+	env.start(t, cfg)
+
+	alpha := compressionClient(t, env.sitePort, "alpha.localhost")
+	waitForSite(t, alpha, "https://alpha.localhost/")
+
+	status, encoding, body := getEncoded(t, alpha, "https://alpha.localhost/")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "gzip", encoding)
+
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	require.NoError(t, err)
+	plain, err := io.ReadAll(zr)
+	require.NoError(t, err)
+	assert.Equal(t, page, string(plain))
 }
 
 // TestSyncServesRootIndexForUnknownPath checks the fallback every synced site
@@ -634,4 +663,28 @@ func get(t *testing.T, client *http.Client, url string) (int, string) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return resp.StatusCode, string(body)
+}
+
+// compressionClient returns a client that asks for gzip but leaves the response
+// encoded, so tests can observe the Content-Encoding header.
+func compressionClient(t *testing.T, tlsPort, domain string) *http.Client {
+	t.Helper()
+	client := siteClient(t, tlsPort, domain)
+	client.Transport.(*http.Transport).DisableCompression = true
+	return client
+}
+
+// getEncoded issues a GET that asks for gzip and returns the status, the
+// Content-Encoding header, and the body as it arrived.
+func getEncoded(t *testing.T, client *http.Client, url string) (int, string, []byte) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, resp.Header.Get("Content-Encoding"), body
 }
